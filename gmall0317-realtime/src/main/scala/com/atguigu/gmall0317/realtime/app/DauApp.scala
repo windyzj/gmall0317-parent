@@ -5,10 +5,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 
 import com.alibaba.fastjson.{JSON, JSONObject}
-import com.atguigu.gmall0317.realtime.util.{MyKafkaUtil, RedisUtil}
+import com.atguigu.gmall0317.realtime.util.{MyKafkaUtil, OffsetManager, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
+import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import redis.clients.jedis.Jedis
 
@@ -22,12 +24,27 @@ object DauApp {
     val ssc = new StreamingContext(sparkConf, Seconds(5))
     val topic = "GMALL0317_STARTUP"
     val groupId = "dau_app_group"
-    val inputDstream: InputDStream[ConsumerRecord[String, String]] = MyKafkaUtil.getKafkaStream(topic, ssc, groupId)
+    var inputDstream: InputDStream[ConsumerRecord[String, String]]=null
+    val offsetMap: Map[TopicPartition, Long] = OffsetManager.getOffset(topic,groupId )
+    if(offsetMap!=null){
+      inputDstream = MyKafkaUtil.getKafkaStream(topic, ssc,offsetMap, groupId)
+    }else{
+       inputDstream = MyKafkaUtil.getKafkaStream(topic, ssc,  groupId)
+    }
+
+
+    //从流中rdd 获得偏移量的结束点 数组
+    var offsetRanges: Array[OffsetRange]=null
+    val inputWithOffsetDstream: DStream[ConsumerRecord[String, String]] = inputDstream.transform { rdd =>
+      offsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+      rdd
+    }
+
 
     //inputDstream.map(_.value()).print(100)
 
     //前置处理 1 结构化  2 日期 3 小时
-    val jsonObjDstream: DStream[JSONObject] = inputDstream.map { record =>
+    val jsonObjDstream: DStream[JSONObject] = inputWithOffsetDstream.map { record =>
       val jsonString: String = record.value()
       val jsonObj: JSONObject = JSON.parseObject(jsonString)
       val ts: lang.Long = jsonObj.getLong("ts")
@@ -79,7 +96,16 @@ object DauApp {
 
     }*/
 
-    filteredDstream.print(100)
+   // filteredDstream.print(100)
+
+    filteredDstream.foreachRDD{rdd=>
+      ///保存操作
+
+      //提交偏移量
+      OffsetManager.saveOffset(topic,groupId,offsetRanges)
+
+
+    }
 
 
 
