@@ -20,19 +20,23 @@ import scala.collection.mutable.ListBuffer
 object DauApp {
 
   def main(args: Array[String]): Unit = {
+    //1、尝试读取redis中的偏移量  OffsetManager.getOffset
+
     val sparkConf: SparkConf = new SparkConf().setAppName("dau_app").setMaster("local[4]")
     val ssc = new StreamingContext(sparkConf, Seconds(5))
     val topic = "GMALL0317_STARTUP"
     val groupId = "dau_app_group"
     var inputDstream: InputDStream[ConsumerRecord[String, String]]=null
     val offsetMap: Map[TopicPartition, Long] = OffsetManager.getOffset(topic,groupId )
+
+    //2、 把偏移量交给kafka ，让kafka按照偏移量的位置读取数据流
     if(offsetMap!=null){
       inputDstream = MyKafkaUtil.getKafkaStream(topic, ssc,offsetMap, groupId)
     }else{
        inputDstream = MyKafkaUtil.getKafkaStream(topic, ssc,  groupId)
     }
 
-
+   //3、  获得偏移量的结束位置
     //从流中rdd 获得偏移量的结束点 数组
     var offsetRanges: Array[OffsetRange]=null
     val inputWithOffsetDstream: DStream[ConsumerRecord[String, String]] = inputDstream.transform { rdd =>
@@ -40,6 +44,7 @@ object DauApp {
       rdd
     }
 
+    //4、计算（调整结构、去重、关联、计算、聚合....）
 
     //inputDstream.map(_.value()).print(100)
 
@@ -96,11 +101,16 @@ object DauApp {
 
     }*/
 
-   // filteredDstream.print(100)
+    filteredDstream.cache()
+
+    filteredDstream.print(100)
 
     filteredDstream.foreachRDD{rdd=>
+      //5、计算结果的保存
+
       ///保存操作
 
+      //6、  把偏移量结束位置更新到redis/mysql
       //提交偏移量
       OffsetManager.saveOffset(topic,groupId,offsetRanges)
 
