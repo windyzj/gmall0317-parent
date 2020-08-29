@@ -5,7 +5,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 
 import com.alibaba.fastjson.{JSON, JSONObject}
-import com.atguigu.gmall0317.realtime.util.{MyKafkaUtil, OffsetManager, RedisUtil}
+import com.atguigu.gmall0317.realtime.bean.DauInfo
+import com.atguigu.gmall0317.realtime.util.{MyEsUtil, MyKafkaUtil, OffsetManager, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
@@ -70,7 +71,8 @@ object DauApp {
       for (jsonObj <- jsonList) {
         val dauKey = "dau:" + jsonObj.get("dt")
         val mid = jsonObj.getJSONObject("common").getString("mid")
-        val ifNonExists: lang.Long = jedis.sadd(dauKey, mid)
+        val ts: Long = new Date().getTime
+        val ifNonExists: lang.Long = jedis.zadd(dauKey, ts,mid)
         if (ifNonExists == 1) {
           filteredList += jsonObj
         }
@@ -87,7 +89,7 @@ object DauApp {
       // string   key?  dau:[date]:mid:[mid]   value 1/0    api?  setnx  如果有需求：查询今天所有的mid  keys dau:[date]:mid:*  O(N)     可以分摊到多台机器中
       // set     key ?  dau:[date]   value? [mid]    api?  sadd   如果有需求：查询今天所有的mid  smembers key O(1)  无法通过集群方式分摊数据和qps
       // hash   key ? dau:[date]   value? [mid] :1    api? hash 可以但没必要
-      // zset   key?   dau:[date]   value? [mid] score  api? zadd  可以但没必要吗？
+      // zset   key?   dau:[date]   value? [mid] score  api? zadd  //可以但没必要吗？
       val jedis: Jedis = RedisUtil.getJedisClient // 1 连接池
       val dauKey = "dau:" + jsonObj.get("dt")
       val mid = jsonObj.getJSONObject("common").getString("mid")
@@ -108,17 +110,35 @@ object DauApp {
     filteredDstream.foreachRDD{rdd=>
       //5、计算结果的保存
 
-      ///保存操作
+      ///保存操作  问题：1 不幂等 2 每条数据提交 浪费io
+//      rdd.foreach{jsonObj=>
+//        val commonObj: JSONObject = jsonObj.getJSONObject("common")
+//        val dauInfo = DauInfo(commonObj.getString("mid"), commonObj.getString("uid"), commonObj.getString("ar"), commonObj.getString("ch")
+//          , commonObj.getString("vc"), jsonObj.getString("dt"), jsonObj.getString("hr"), "00", jsonObj.getLong("ts"))
+//
+//         MyEsUtil.saveDoc(dauInfo,"gmall_dau_info_0317_"+jsonObj.getString("dt"))
+//    }
+
+      ///保存操作  问题：1  幂等 2  批量操作
+      rdd.foreachPartition{jsonObjItr=>
+        val jsonObjList: List[JSONObject] = jsonObjItr.toList
+        if(jsonObjList.size >0){
+            val docList: List[(DauInfo, String)] = jsonObjList.map { jsonObj =>
+              val commonObj: JSONObject = jsonObj.getJSONObject("common")
+              val dauInfo = DauInfo(commonObj.getString("mid"), commonObj.getString("uid"), commonObj.getString("ar"), commonObj.getString("ch")
+                , commonObj.getString("vc"), jsonObj.getString("dt"), jsonObj.getString("hr"), "00", jsonObj.getLong("ts"))
+              (dauInfo, dauInfo.mid)
+            }
+            val dt: String = docList(0)._1.dt
+            MyEsUtil.saveDocBulk( docList  ,"gmall_dau_info_0317_"+dt)
+        }
+      }
+
 
       //6、  把偏移量结束位置更新到redis/mysql
       //提交偏移量
       OffsetManager.saveOffset(topic,groupId,offsetRanges)
-
-
     }
-
-
-
 
     ssc.start()
     ssc.awaitTermination()
