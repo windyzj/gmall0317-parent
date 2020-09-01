@@ -52,7 +52,18 @@ object OdsGmallMaxwell {
         val dataJson: String = jsonObj.getString("data")
         val table: String = jsonObj.getString("table")
         val topic="ODS_T_"+table.toUpperCase
-        MyKafkaSender.send(topic,dataJson)
+        println(topic+"::"+dataJson)
+        if(jsonObj.getString("type")!=null&&(
+          (table=="order_info"&&jsonObj.getString("type")=="insert")
+       || (table=="order_detail"&&jsonObj.getString("type")=="insert")
+       || (table=="base_province"&&(jsonObj.getString("type")=="insert"||jsonObj.getString("type")=="update")||jsonObj.getString("type")=="bootstrap-insert")
+       || (table=="user_info"&&(jsonObj.getString("type")=="insert"||jsonObj.getString("type")=="update")||jsonObj.getString("type")=="bootstrap-insert")
+          )){
+
+          MyKafkaSender.send(topic,dataJson)
+
+        }
+
       }
       OffsetManager.saveOffset(topic,groupId,offsetRanges)
     }
