@@ -42,7 +42,16 @@ object MyEsUtil {
       bulkBuilder.addAction(index)
     }
     val items: util.List[BulkResult#BulkResultItem] = jestClient.execute(bulkBuilder.build()).getItems
+    items
     println("共提交："+items.size()+"条数据")
+    import collection.JavaConverters._
+    for (item <- items.asScala ) {
+        if(item.errorReason!=null&&item.errorReason.size>0 ){
+          println("es error reason:"+item.errorReason)
+          throw new RuntimeException("")
+        }
+    }
+
     jestClient.close()
   }
 

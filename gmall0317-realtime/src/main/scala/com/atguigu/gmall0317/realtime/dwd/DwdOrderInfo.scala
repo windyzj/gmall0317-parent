@@ -1,8 +1,9 @@
 package com.atguigu.gmall0317.realtime.dwd
 
+import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall0317.realtime.bean.OrderInfo
-import com.atguigu.gmall0317.realtime.util.{MyKafkaUtil, OffsetManager, PhoenixUtil}
+import com.atguigu.gmall0317.realtime.util.{MyEsUtil, MyKafkaSender, MyKafkaUtil, OffsetManager, PhoenixUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
@@ -39,16 +40,22 @@ object DwdOrderInfo {
 
     val orderInfoDstream: DStream[OrderInfo] = inputWithOffsetDstream.map { record =>
       val jsonString: String = record.value()
-      JSON.parseObject(jsonString,classOf[OrderInfo])
-    }
+      val orderInfo: OrderInfo = JSON.parseObject(jsonString,classOf[OrderInfo])
+      val createTimeArr: Array[String] = orderInfo.create_time.split(" ")
 
-    orderInfoDstream.map{orderInfo=>
-      val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList("select * from gmall0317_province_info where id='"+orderInfo.province_id+"'")
-      val provinceJsonObj: JSONObject = provinceJsonObjList(0)
-      orderInfo.province_3166_2_code=provinceJsonObj.getString("province_3166_2_code")
-   //   orderInfo.province_id ==> orderInfo.province_3166_2_code
+      orderInfo.create_date=createTimeArr(0)
+      orderInfo.create_hour=createTimeArr(1).split(":")(0)
+
       orderInfo
     }
+
+//    orderInfoDstream.map{orderInfo=>
+//      val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList("select * from gmall0317_province_info where id='"+orderInfo.province_id+"'")
+//      val provinceJsonObj: JSONObject = provinceJsonObjList(0)
+//      orderInfo.province_3166_2_code=provinceJsonObj.getString("province_3166_2_code")
+//   //   orderInfo.province_id ==> orderInfo.province_3166_2_code
+//      orderInfo
+//    }
 
 //    // driver中执行 启动时执行 只执行一次
 //    val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList("select * from gmall0317_province_info  ")
@@ -78,8 +85,24 @@ object DwdOrderInfo {
     }
     orderInfoWithProvinceDstream.print(100)
 
+    orderInfoWithProvinceDstream.foreachRDD { rdd =>
+      rdd.foreachPartition { orderInfoItr =>
+        val orderInfolist: List[OrderInfo] = orderInfoItr.toList
+        if (orderInfolist != null && orderInfolist.size > 0) {
+          val create_date: String = orderInfolist(0).create_date
 
+          val orderInfoWithIdList: List[(OrderInfo, String)] = orderInfolist.map(orderInfo => (orderInfo, orderInfo.id.toString))
 
+          val indexName = "gmall0317_order_info_" + create_date
+          MyEsUtil.saveDocBulk(orderInfoWithIdList, indexName)
+        }
+        for (orderInfo <- orderInfolist ) {
+          MyKafkaSender.send("DWD_ORDER_INFO",JSON.toJSONString(orderInfo,new SerializeConfig(true)))  //fastjson不能直接把case class 转为jsonstring
+        }
+      }
+
+     OffsetManager.saveOffset(topic,groupId,offsetRanges)
+    }
 
 
 

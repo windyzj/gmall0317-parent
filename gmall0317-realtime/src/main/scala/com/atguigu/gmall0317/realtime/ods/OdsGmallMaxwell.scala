@@ -59,7 +59,7 @@ object OdsGmallMaxwell {
        || (table=="base_province"&&(jsonObj.getString("type")=="insert"||jsonObj.getString("type")=="update")||jsonObj.getString("type")=="bootstrap-insert")
        || (table=="user_info"&&(jsonObj.getString("type")=="insert"||jsonObj.getString("type")=="update")||jsonObj.getString("type")=="bootstrap-insert")
           )){
-
+          Thread.sleep(200)
           MyKafkaSender.send(topic,dataJson)
 
         }
