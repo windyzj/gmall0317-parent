@@ -1,6 +1,7 @@
 package com.atguigu.gmall0317.realtime.dws
 
 import java.text.SimpleDateFormat
+import java.util
 
 import com.alibaba.fastjson.JSON
 import com.atguigu.gmall0317.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
@@ -12,7 +13,7 @@ import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 import redis.clients.jedis.Jedis
-
+import collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
 
 object DwsOrderWideApp {
@@ -122,7 +123,75 @@ object DwsOrderWideApp {
       filteredOrderWideList.toIterator
     }
 
-    filteredOrderWideDstream.print(1000)
+    //orderWideDstream.print(1000)
+
+
+    val orderWideWithFinalAmountDstream: DStream[OrderWide] = orderWideDstream.map { orderWide =>
+
+      //1  要先进行是否是最后一笔的判断
+      //   判断公式： 该笔订单明细的应付金额  ==  订单的应付总额-累计的其他明细的应付金额
+      //						                          ==   original_total_amount -  Σ (sku_price*sku_num)
+    val originalTotalAmount = BigDecimal(orderWide.original_total_amount) //订单应付总额
+    val originDetail: BigDecimal = BigDecimal(orderWide.sku_price * orderWide.sku_num) //订单单笔明细应付
+    val finalTotalAmount: BigDecimal = BigDecimal(orderWide.final_total_amount) //订单实付总额
+    var accOriginDetailTotal = BigDecimal(0) //累计总应付值
+    var accFinalDetailTotal = BigDecimal(0) //累计总实付值
+    val finalAmountKey = "final_amount:" + orderWide.order_id //累计总实付key
+    val originalAmountKey = "origin_amount:" + orderWide.order_id
+      var finalAmountMap: util.Map[String, String]=null
+      // Redis中如何保存  累计的其他明细的应付金额
+    //              type？  hash     key ?    origin_amount:[orderId]  field ? order_detail_id    value ? sku_price*sku_num    api? 读  hgetall 写  hset
+    //  累计 存总值？ 还是存明细？
+    val jedis: Jedis = RedisUtil.getJedisClient
+      val orginalAmountMap: util.Map[String, String] = jedis.hgetAll(originalAmountKey)
+      if(orginalAmountMap!=null&&orginalAmountMap.size()>0){
+        orginalAmountMap.put(orderWide.order_detail_id.toString, originDetail.toString()) //防止有重发的数据做幂等性处理
+        //  累计总应付值 ==？ 订单总应付
+        for ((orderDetailId, orderOriginDetail) <- orginalAmountMap.asScala) {
+          accOriginDetailTotal += BigDecimal(orderOriginDetail)
+        }
+      }
+      if (originalTotalAmount == accOriginDetailTotal) {
+        //2 如果是最后一笔  减法
+        //  减法公式：			   final_detail_amount = 订单实付总金额 - 累计的其他明细的实付金额
+        //											                = final_total_amount - Σ final_detail_amount（other)
+        // Redis中如何保存  累计的其他明细的实付金额
+        //              type？  hash     key ?    final_amount:[orderId]  field ? order_detail_id    value ?  final_detail_amount    api? 读  hgetall 写  hset
+        //  累计 存明细
+
+        finalAmountMap = jedis.hgetAll(finalAmountKey)
+        if(finalAmountMap!=null&&finalAmountMap.size()>0){
+          for ((orderDetailOtherId, finalDetailAmount) <- finalAmountMap.asScala) {
+            if (orderDetailOtherId != orderWide.order_detail_id.toString) { //如果极端情况出现重算 ，而redis中有残留的历史明细  要剔除掉   ?
+              accFinalDetailTotal += BigDecimal(finalDetailAmount)
+            }
+          }
+        }
+        orderWide.final_detail_amount = (finalTotalAmount - accFinalDetailTotal).setScale(2, BigDecimal.RoundingMode.HALF_UP).doubleValue()
+      } else {
+        // 3  如果不是最后一笔  乘除法
+        // 乘除法公式 ：
+        // 商品的实付分摊金额=订单实付总金额 * 商品的应付金额/订单的应付总额
+        //final_detail_amount  = final_total_amount * (sku_price* sku_num) / original_total_amount
+        val finalDetailAmount: BigDecimal = finalTotalAmount * originDetail / originalTotalAmount
+        orderWide.final_detail_amount = finalDetailAmount.setScale(2, BigDecimal.RoundingMode.HALF_UP).doubleValue()
+      }
+      if(orderWide.final_detail_amount==BigDecimal.valueOf(0L)){
+        println(  orderWide)
+      }
+      //4 把计算结构写入redis 以备后续明细计算
+      //把实付明细写入
+      jedis.hset(finalAmountKey, orderWide.order_detail_id.toString, orderWide.final_detail_amount.toString)
+      //把应付明细写入
+      jedis.hset(originalAmountKey, orderWide.order_detail_id.toString, originDetail.toString())
+      jedis.close()
+
+      orderWide
+    }
+    orderWideWithFinalAmountDstream.print(1000)
+
+
+
     ssc.start()
     ssc.awaitTermination()
 

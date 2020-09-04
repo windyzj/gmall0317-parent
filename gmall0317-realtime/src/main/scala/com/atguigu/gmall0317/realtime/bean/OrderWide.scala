@@ -85,4 +85,13 @@ case class OrderWide(
 
     }
   }
+
+  override def toString: String = {
+    "order_id:"+order_id+
+    "|order_detail_id:"+order_detail_id+
+     "|sku_price:"+sku_price+"|sku_num:"+sku_num+
+    "|original_total_amount:"+original_total_amount+
+    "|final_total_amount:"+final_total_amount+"|final_detail_amount:"+final_detail_amount
+
+  }
 }

@@ -68,7 +68,7 @@ object DwdOrderDetailApp {
 
     orderDetailDstream.foreachRDD{rdd=>
       rdd.foreach{orderDetail=>
-        MyKafkaSender.send("DWD_ORDER_DETAIL",  JSON.toJSONString(orderDetail,new SerializeConfig(true)))
+        MyKafkaSender.send("DWD_ORDER_DETAIL",orderDetail.order_id.toString , JSON.toJSONString(orderDetail,new SerializeConfig(true)))
 
       }
       OffsetManager.saveOffset(topic,groupId,offsetRanges)
