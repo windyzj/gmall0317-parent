@@ -107,11 +107,11 @@
             <version>4.5.2</version>
         </dependency>
 
-        <dependency>
+<!--        <dependency>
             <groupId>org.codehaus.janino</groupId>
             <artifactId>commons-compiler</artifactId>
             <version>2.7.8</version>
-        </dependency>
+        </dependency>-->
 
         <dependency>
             <groupId>com.thoughtworks.paranamer</groupId>
@@ -142,6 +142,13 @@
             <artifactId>spark-sql_2.12</artifactId>
             <version>${spark.version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>ru.yandex.clickhouse</groupId>
+            <artifactId>clickhouse-jdbc</artifactId>
+            <version>0.1.55</version>
+        </dependency>
+
 
     </dependencies>
 

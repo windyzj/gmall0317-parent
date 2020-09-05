@@ -53,7 +53,7 @@ object OdsGmallMaxwell {
         val table: String = jsonObj.getString("table")
         val topic="ODS_T_"+table.toUpperCase
         println(topic+"::"+dataJson)
-        if(jsonObj.getString("type")!=null&&(
+        if(dataJson!=null&&dataJson.size>2&&jsonObj.getString("type")!=null&&(
           (table=="order_info"&&jsonObj.getString("type")=="insert")
        || (table=="order_detail"&&jsonObj.getString("type")=="insert")
        || (table=="base_province"&&(jsonObj.getString("type")=="insert"||jsonObj.getString("type")=="update")||jsonObj.getString("type")=="bootstrap-insert")

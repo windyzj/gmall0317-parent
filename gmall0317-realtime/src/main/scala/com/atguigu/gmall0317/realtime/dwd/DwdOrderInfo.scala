@@ -1,5 +1,7 @@
 package com.atguigu.gmall0317.realtime.dwd
 
+import java.lang
+
 import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall0317.realtime.bean.OrderInfo
@@ -85,7 +87,59 @@ object DwdOrderInfo {
     }
     orderInfoWithProvinceDstream.print(100)
 
-    orderInfoWithProvinceDstream.foreachRDD { rdd =>
+    //////////////////用户信息关联//////////////////////////
+
+
+    val orderInfoWithDimDstream: DStream[OrderInfo] = orderInfoWithProvinceDstream.mapPartitions { orderInfoItr =>
+      val orderInfoList: List[OrderInfo] = orderInfoItr.toList
+      val userIdList: List[Long] = orderInfoList.map(_.user_id)
+      val sql = "select id ,user_level ,  birthday  , gender  , age_group  , gender_name from gmall0317_user_info ui where  ui.id in ('" + userIdList.mkString("','") + "')";
+      val userJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+      val userJsonMap: Map[lang.Long, JSONObject] = userJsonObjList.map(userJsonObj => (userJsonObj.getLong("ID"), userJsonObj)).toMap
+      for (orderInfo <- orderInfoList) {
+        val userJsonObj: JSONObject = userJsonMap.getOrElse(orderInfo.user_id, null)
+        if (userJsonObj != null) {
+          orderInfo.user_gender = userJsonObj.getString("GENDER_NAME")
+          orderInfo.user_age_group = userJsonObj.getString("AGE_GROUP")
+        }
+      }
+
+      orderInfoList.toIterator
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//    val orderInfoWithUserDstream: DStream[OrderInfo] = orderInfoWithProvinceDstream.mapPartitions { orderInfoItr =>
+//      val orderList: List[OrderInfo] = orderInfoItr.toList
+//      if(orderList.size>0) {
+//        val userIdList: List[Long] = orderList.map(_.user_id)
+//        val sql = "select id ,user_level ,  birthday  , gender  , age_group  , gender_name from gmall0105_user_info where id in ('" + userIdList.mkString("','") + "')"
+//        val userJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+//        val userJsonObjMap: Map[Long, JSONObject] = userJsonObjList.map(userJsonObj => (userJsonObj.getLongValue("ID"), userJsonObj)).toMap
+//        for (orderInfo <- orderList) {
+//          val userJsonObj: JSONObject = userJsonObjMap.getOrElse(orderInfo.user_id, null)
+//          orderInfo.user_age_group = userJsonObj.getString("AGE_GROUP")
+//          orderInfo.user_gender = userJsonObj.getString("GENDER_NAME")
+//        }
+//      }
+//      orderList.toIterator
+//    }
+
+
+
+    orderInfoWithDimDstream.foreachRDD { rdd =>
       rdd.foreachPartition { orderInfoItr =>
         val orderInfolist: List[OrderInfo] = orderInfoItr.toList
         if (orderInfolist != null && orderInfolist.size > 0) {
@@ -94,7 +148,7 @@ object DwdOrderInfo {
           val orderInfoWithIdList: List[(OrderInfo, String)] = orderInfolist.map(orderInfo => (orderInfo, orderInfo.id.toString))
 
           val indexName = "gmall0317_order_info_" + create_date
-          MyEsUtil.saveDocBulk(orderInfoWithIdList, indexName)
+//          MyEsUtil.saveDocBulk(orderInfoWithIdList, indexName)
         }
         for (orderInfo <- orderInfolist ) {
           MyKafkaSender.send("DWD_ORDER_INFO",JSON.toJSONString(orderInfo,new SerializeConfig(true)))  //fastjson不能直接把case class 转为jsonstring

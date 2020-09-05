@@ -2,6 +2,7 @@ package com.atguigu.gmall0317.realtime.dws
 
 import java.text.SimpleDateFormat
 import java.util
+import java.util.Properties
 
 import com.alibaba.fastjson.JSON
 import com.atguigu.gmall0317.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
@@ -9,10 +10,12 @@ import com.atguigu.gmall0317.realtime.util.{MyKafkaUtil, OffsetManager, RedisUti
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 import redis.clients.jedis.Jedis
+
 import collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
 
@@ -62,7 +65,6 @@ object DwsOrderWideApp {
     }
 
 
-
     // 1 提取数据 2 分topic
     val orderDetailDstream: DStream[OrderDetail] = inputGetOffsetDstreamOrderDetail.map { record =>
       val jsonString: String = record.value()
@@ -70,7 +72,7 @@ object DwsOrderWideApp {
       val orderDetail: OrderDetail = JSON.parseObject(jsonString, classOf[OrderDetail])
       orderDetail
     }
-   // orderDetailDstream.print(100)
+    // orderDetailDstream.print(100)
 
     val orderInfoDstream: DStream[OrderInfo] = inputGetOffsetDstreamOrderInfo.map { record =>
       val jsonString: String = record.value()
@@ -78,25 +80,25 @@ object DwsOrderWideApp {
       val orderInfo: OrderInfo = JSON.parseObject(jsonString, classOf[OrderInfo])
       orderInfo
     }
-   // orderInfoDstream.print(100)
+    // orderInfoDstream.print(100)
 
 
-//    val orderInfoWithKeyDstream: DStream[(Long, OrderInfo)] = orderInfoDstream.map(orderInfo=>(orderInfo.id,orderInfo))
-//    val orderDetailWithKeyDstream: DStream[(Long, OrderDetail)] = orderDetailDstream.map(orderDetail=>(orderDetail.order_id,orderDetail))
-//    orderInfoWithKeyDstream.join(orderDetailWithKeyDstream).print(1000)
+    //    val orderInfoWithKeyDstream: DStream[(Long, OrderInfo)] = orderInfoDstream.map(orderInfo=>(orderInfo.id,orderInfo))
+    //    val orderDetailWithKeyDstream: DStream[(Long, OrderDetail)] = orderDetailDstream.map(orderDetail=>(orderDetail.order_id,orderDetail))
+    //    orderInfoWithKeyDstream.join(orderDetailWithKeyDstream).print(1000)
 
 
     //1
-    val orderInfoWindowDstream: DStream[OrderInfo] = orderInfoDstream.window(Seconds(10),Seconds(5))
-    val orderDetailWindowDstream: DStream[OrderDetail] = orderDetailDstream.window(Seconds(10),Seconds(5))
+    val orderInfoWindowDstream: DStream[OrderInfo] = orderInfoDstream.window(Seconds(10), Seconds(5))
+    val orderDetailWindowDstream: DStream[OrderDetail] = orderDetailDstream.window(Seconds(10), Seconds(5))
 
 
-    val orderInfoWindowWithKeyDstream: DStream[(Long, OrderInfo)] = orderInfoWindowDstream.map(orderInfo=>(orderInfo.id,orderInfo))
-    val orderDetailWindowWithKeyDstream: DStream[(Long, OrderDetail)] = orderDetailWindowDstream.map(orderDetail=>(orderDetail.order_id,orderDetail))
+    val orderInfoWindowWithKeyDstream: DStream[(Long, OrderInfo)] = orderInfoWindowDstream.map(orderInfo => (orderInfo.id, orderInfo))
+    val orderDetailWindowWithKeyDstream: DStream[(Long, OrderDetail)] = orderDetailWindowDstream.map(orderDetail => (orderDetail.order_id, orderDetail))
 
     val orderTupleDstream: DStream[(Long, (OrderInfo, OrderDetail))] = orderInfoWindowWithKeyDstream.join(orderDetailWindowWithKeyDstream)
 
-    val orderWideDstream: DStream[OrderWide] = orderTupleDstream.map{case(orderId,(orderInfo,orderDetail))=> new OrderWide(orderInfo,orderDetail)  }
+    val orderWideDstream: DStream[OrderWide] = orderTupleDstream.map { case (orderId, (orderInfo, orderDetail)) => new OrderWide(orderInfo, orderDetail) }
 
 
 
@@ -126,25 +128,25 @@ object DwsOrderWideApp {
     //orderWideDstream.print(1000)
 
 
-    val orderWideWithFinalAmountDstream: DStream[OrderWide] = orderWideDstream.map { orderWide =>
+    val orderWideWithFinalAmountDstream: DStream[OrderWide] = filteredOrderWideDstream.map { orderWide =>
 
       //1  要先进行是否是最后一笔的判断
       //   判断公式： 该笔订单明细的应付金额  ==  订单的应付总额-累计的其他明细的应付金额
       //						                          ==   original_total_amount -  Σ (sku_price*sku_num)
-    val originalTotalAmount = BigDecimal(orderWide.original_total_amount) //订单应付总额
+      val originalTotalAmount = BigDecimal(orderWide.original_total_amount) //订单应付总额
     val originDetail: BigDecimal = BigDecimal(orderWide.sku_price * orderWide.sku_num) //订单单笔明细应付
     val finalTotalAmount: BigDecimal = BigDecimal(orderWide.final_total_amount) //订单实付总额
     var accOriginDetailTotal = BigDecimal(0) //累计总应付值
     var accFinalDetailTotal = BigDecimal(0) //累计总实付值
     val finalAmountKey = "final_amount:" + orderWide.order_id //累计总实付key
     val originalAmountKey = "origin_amount:" + orderWide.order_id
-      var finalAmountMap: util.Map[String, String]=null
+      var finalAmountMap: util.Map[String, String] = null
       // Redis中如何保存  累计的其他明细的应付金额
-    //              type？  hash     key ?    origin_amount:[orderId]  field ? order_detail_id    value ? sku_price*sku_num    api? 读  hgetall 写  hset
-    //  累计 存总值？ 还是存明细？
-    val jedis: Jedis = RedisUtil.getJedisClient
+      //              type？  hash     key ?    origin_amount:[orderId]  field ? order_detail_id    value ? sku_price*sku_num    api? 读  hgetall 写  hset
+      //  累计 存总值？ 还是存明细？
+      val jedis: Jedis = RedisUtil.getJedisClient
       val orginalAmountMap: util.Map[String, String] = jedis.hgetAll(originalAmountKey)
-      if(orginalAmountMap!=null&&orginalAmountMap.size()>0){
+      if (orginalAmountMap != null && orginalAmountMap.size() > 0) {
         orginalAmountMap.put(orderWide.order_detail_id.toString, originDetail.toString()) //防止有重发的数据做幂等性处理
         //  累计总应付值 ==？ 订单总应付
         for ((orderDetailId, orderOriginDetail) <- orginalAmountMap.asScala) {
@@ -160,7 +162,7 @@ object DwsOrderWideApp {
         //  累计 存明细
 
         finalAmountMap = jedis.hgetAll(finalAmountKey)
-        if(finalAmountMap!=null&&finalAmountMap.size()>0){
+        if (finalAmountMap != null && finalAmountMap.size() > 0) {
           for ((orderDetailOtherId, finalDetailAmount) <- finalAmountMap.asScala) {
             if (orderDetailOtherId != orderWide.order_detail_id.toString) { //如果极端情况出现重算 ，而redis中有残留的历史明细  要剔除掉   ?
               accFinalDetailTotal += BigDecimal(finalDetailAmount)
@@ -176,8 +178,8 @@ object DwsOrderWideApp {
         val finalDetailAmount: BigDecimal = finalTotalAmount * originDetail / originalTotalAmount
         orderWide.final_detail_amount = finalDetailAmount.setScale(2, BigDecimal.RoundingMode.HALF_UP).doubleValue()
       }
-      if(orderWide.final_detail_amount==BigDecimal.valueOf(0L)){
-        println(  orderWide)
+      if (orderWide.final_detail_amount == BigDecimal.valueOf(0L)) {
+        println(orderWide)
       }
       //4 把计算结构写入redis 以备后续明细计算
       //把实付明细写入
@@ -188,15 +190,34 @@ object DwsOrderWideApp {
 
       orderWide
     }
+   //checkpoint     persist
+    orderWideWithFinalAmountDstream.cache()
     orderWideWithFinalAmountDstream.print(1000)
 
 
+    val sparkSession = SparkSession.builder()
+      .appName("order_detail_wide_spark_app")
+      .getOrCreate()
+    import sparkSession.implicits._
+    // 保存到clickhouse 里
+    orderWideWithFinalAmountDstream.foreachRDD { rdd =>
+      val df: DataFrame = rdd.toDF()
+      df.write.mode(SaveMode.Append)
+        .option("batchsize", "100")
+        .option("isolationLevel", "NONE") // 设置事务
+        .option("numPartitions", "4") // 设置并发
+        .option("driver", "ru.yandex.clickhouse.ClickHouseDriver")
+        .jdbc("jdbc:clickhouse://hdp1:8123/gmall0317", "order_wide_0317", new Properties())
+
+      OffsetManager.saveOffset(topicOrderInfo, groupId, offsetRangesOrderInfo)
+      OffsetManager.saveOffset(topicOrderDetail, groupId, offsetRangesOrderDetail)
+    }
 
     ssc.start()
     ssc.awaitTermination()
 
 
-    // 保存到clickhouse 里
+
   }
 
 }
