@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper SYSTEM "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.atguigu.gmall0317.publisher.dao.OrderWideMapper">
+    <select id="selectOrderWideTotal" resultType="java.math.BigDecimal">
+          select sum(final_total_amount) order_amount  from order_wide_0317 where dt=#{date}
+    </select>
+
+    <select id="selectOrderAmountHour"  resultType="map">
+        SELECT  toHour(create_time) AS hr,  sum(final_total_amount) AS order_amount
+        FROM order_wide_0317
+       WHERE dt = #{date}
+       GROUP BY toHour(create_time)
+    </select>
+
+    <resultMap id="orderAmountResultMap" type="java.util.Map" autoMapping="true">
+    </resultMap>
+
+</mapper>

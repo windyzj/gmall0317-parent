@@ -89,7 +89,7 @@ object DwdOrderDetailApp {
 
 
 
-    orderDetailWithSkuDstream.foreachRDD{rdd=>
+    orderDetailDstream.foreachRDD{rdd=>
       rdd.foreach{orderDetail=>
         MyKafkaSender.send("DWD_ORDER_DETAIL",orderDetail.order_id.toString , JSON.toJSONString(orderDetail,new SerializeConfig(true)))
 

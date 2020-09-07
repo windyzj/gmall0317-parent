@@ -1,9 +1,11 @@
 package com.atguigu.gmall0317.publisher;
 
+import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
+@MapperScan(basePackages = "com.atguigu.gmall0317.publisher.dao")
 public class Gmall0317PublisherApplication {
 
     public static void main(String[] args) {
