@@ -5,7 +5,7 @@
           select sum(final_total_amount) order_amount  from order_wide_0317 where dt=#{date}
     </select>
 
-    <select id="selectOrderAmountHour"  resultType="map">
+    <select id="selectOrderAmountHour"  resultMap="orderAmountResultMap">
         SELECT  toHour(create_time) AS hr,  sum(final_total_amount) AS order_amount
         FROM order_wide_0317
        WHERE dt = #{date}

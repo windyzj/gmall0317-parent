@@ -15,6 +15,8 @@ import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 import scalikejdbc.{DB, SQL}
 import scalikejdbc.config.DBs
 
+import scala.collection.mutable.ListBuffer
+
 object AdsTrademarkApp {
 
 
@@ -55,31 +57,36 @@ object AdsTrademarkApp {
     orderWideDstream.print(1000)
 
     //维度聚合
-    val trademarkSumDstream: DStream[(String, Double)] = orderWideDstream.map(orderWide=>(orderWide.tm_name,orderWide.final_detail_amount)).reduceByKey(_+_)
+    val trademarkSumDstream: DStream[(String, Double)] = orderWideDstream.map(orderWide => (orderWide.tm_name, orderWide.final_detail_amount)).reduceByKey(_ + _)
 
 
-    trademarkSumDstream.foreachRDD{rdd=>
+    trademarkSumDstream.foreachRDD { rdd =>
       val trademarkTupleArr: Array[(String, Double)] = rdd.collect()
 
-      DBs.setup()
-      DB.localTx(implicit session => {
-        val dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-        val statTime: String = dateFormat.format(new Date())
-        //数据保存 表
-        for ((trademarkName, orderAmount) <- trademarkTupleArr) {
-            SQL( " insert into  trademark_order_amount_stat values(?,?,?)").bind(statTime,trademarkName,orderAmount).update().apply()
-        }
-        //偏移量的保存
-        for (offsetRange <- offsetRanges ) {
-          SQL( " replace into  offset_0317 values(?,?,?,?)").bind(groupId,topic,offsetRange.partition,offsetRange.untilOffset).update().apply()
-        }
+      if (trademarkTupleArr != null && trademarkTupleArr.size > 0) {
+        DBs.setup()
+        DB.localTx(implicit session => {
+          val dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+          val statTime: String = dateFormat.format(new Date())
+          //数据保存 表
+          val paramsList: ListBuffer[Seq[Any]] = ListBuffer[Seq[Any]]()
+          for ((trademarkName, orderAmount) <- trademarkTupleArr) { //batchParamsList.toSeq:_*
+            paramsList.append(Seq(statTime, trademarkName, orderAmount))
+          }
+          SQL(" insert into  trademark_order_amount_stat values(?,?,?)").batch(paramsList.toSeq: _*).apply()
+          throw new RuntimeException("测试异常")
+          //偏移量的保存
+          for (offsetRange <- offsetRanges) {
+            SQL(" replace into  offset_0317 values(?,?,?,?)").bind(groupId, topic, offsetRange.partition, offsetRange.untilOffset).update().apply()
+          }
 
-      })
+        })
+      }
+
     }
 
     ssc.start()
     ssc.awaitTermination()
-
 
 
   }

@@ -5,12 +5,14 @@ import java.util
 import java.util.Properties
 
 import com.alibaba.fastjson.JSON
+import com.alibaba.fastjson.serializer.SerializeConfig
 import com.atguigu.gmall0317.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
-import com.atguigu.gmall0317.realtime.util.{MyKafkaUtil, OffsetManager, RedisUtil}
+import com.atguigu.gmall0317.realtime.util.{MyKafkaSender, MyKafkaUtil, OffsetManager, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
+import org.apache.spark.storage.StorageLevel
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
@@ -72,7 +74,7 @@ object DwsOrderWideApp {
       val orderDetail: OrderDetail = JSON.parseObject(jsonString, classOf[OrderDetail])
       orderDetail
     }
-    // orderDetailDstream.print(100)
+      orderDetailDstream.print(100)
 
     val orderInfoDstream: DStream[OrderInfo] = inputGetOffsetDstreamOrderInfo.map { record =>
       val jsonString: String = record.value()
@@ -80,7 +82,7 @@ object DwsOrderWideApp {
       val orderInfo: OrderInfo = JSON.parseObject(jsonString, classOf[OrderInfo])
       orderInfo
     }
-    // orderInfoDstream.print(100)
+      orderInfoDstream.print(100)
 
 
     //    val orderInfoWithKeyDstream: DStream[(Long, OrderInfo)] = orderInfoDstream.map(orderInfo=>(orderInfo.id,orderInfo))
@@ -97,9 +99,9 @@ object DwsOrderWideApp {
     val orderDetailWindowWithKeyDstream: DStream[(Long, OrderDetail)] = orderDetailWindowDstream.map(orderDetail => (orderDetail.order_id, orderDetail))
 
     val orderTupleDstream: DStream[(Long, (OrderInfo, OrderDetail))] = orderInfoWindowWithKeyDstream.join(orderDetailWindowWithKeyDstream)
-
+  //  orderTupleDstream.print(111)
     val orderWideDstream: DStream[OrderWide] = orderTupleDstream.map { case (orderId, (orderInfo, orderDetail)) => new OrderWide(orderInfo, orderDetail) }
-
+  //  orderWideDstream.print(111)
 
 
     // 去重
@@ -125,7 +127,7 @@ object DwsOrderWideApp {
       filteredOrderWideList.toIterator
     }
 
-    //orderWideDstream.print(1000)
+     //orderWideDstream.print(1000)
 
 
     val orderWideWithFinalAmountDstream: DStream[OrderWide] = filteredOrderWideDstream.map { orderWide =>
@@ -191,7 +193,7 @@ object DwsOrderWideApp {
       orderWide
     }
    //checkpoint     persist
-    orderWideWithFinalAmountDstream.cache()
+    orderWideWithFinalAmountDstream.persist(StorageLevel.MEMORY_ONLY)
     orderWideWithFinalAmountDstream.print(1000)
 
 
@@ -201,6 +203,7 @@ object DwsOrderWideApp {
     import sparkSession.implicits._
     // 保存到clickhouse 里
     orderWideWithFinalAmountDstream.foreachRDD { rdd =>
+      rdd.cache()
       val df: DataFrame = rdd.toDF()
       df.write.mode(SaveMode.Append)
         .option("batchsize", "100")
@@ -208,6 +211,11 @@ object DwsOrderWideApp {
         .option("numPartitions", "4") // 设置并发
         .option("driver", "ru.yandex.clickhouse.ClickHouseDriver")
         .jdbc("jdbc:clickhouse://hdp1:8123/gmall0317", "order_wide_0317", new Properties())
+
+
+      rdd.foreach(orderWide=>
+          MyKafkaSender.send("DWS_ORDER_WIDE",JSON.toJSONString(orderWide,new SerializeConfig(true)))
+      )
 
       OffsetManager.saveOffset(topicOrderInfo, groupId, offsetRangesOrderInfo)
       OffsetManager.saveOffset(topicOrderDetail, groupId, offsetRangesOrderDetail)
